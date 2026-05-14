@@ -5,8 +5,7 @@ yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
 
-# Build outputs
-dist/
+# Build outputs (dist/ is kept in git for npm git installs)
 build/
 *.tsbuildinfo
 
