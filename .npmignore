@@ -1,23 +1,8 @@
-# 忽略 node_modules 文件夹
+# Only ignore dev files, not dist/
 node_modules/
-frontend/node_modules/
-
-# 忽略源码目录
 src/
 frontend/src/
-
-# 忽略测试文件
-test/
-
-# 忽略文档和说明文件
-*.md
-README.md
-
-# 忽略构建配置文件
-.gitignore
+.github/
 tsconfig.json
-*.tsbuildinfo
-
-# 忽略开发工具配置
-package-lock.json
-frontend/package-lock.json
+.claude-trace/
+*.log
