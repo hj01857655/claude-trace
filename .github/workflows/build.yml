@@ -21,19 +21,23 @@ jobs:
         with:
           node-version: '20'
 
-      - name: Install dependencies
-        run: npm install
+      - name: Install dependencies (skip prepare)
+        run: npm install --ignore-scripts
+        env:
+          npm_config_ignore_scripts: true
 
-      - name: Install frontend dependencies
-        run: cd frontend && npm install || true
+      - name: Install devDependencies explicitly
+        run: npm install typescript @types/node
 
-      - name: Build core (tsc + copy loaders)
+      - name: Clean and rebuild
         run: |
+          rm -rf dist
           npx tsc
           cp src/interceptor-loader.js src/token-extractor.js dist/
 
       - name: Build frontend (optional)
-        run: npm run build:frontend || echo "⚠️ Frontend build skipped"
+        run: |
+          cd frontend && npm install && npm run build || echo "⚠️ Frontend build skipped"
         continue-on-error: true
 
       - name: Commit dist
