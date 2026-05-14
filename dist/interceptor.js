@@ -37,13 +37,26 @@ class ClaudeTrafficLogger {
     isAnthropicAPI(url) {
         const urlString = typeof url === "string" ? url : url.toString();
         const includeAllRequests = process.env.CLAUDE_TRACE_INCLUDE_ALL_REQUESTS === "true";
-        // 从环境变量读取自定义API端点，默认为api.anthropic.com
-        const apiEndpoint = process.env.CLAUDE_TRACE_API_ENDPOINT || "api.anthropic.com";
+        // Read custom API endpoints from environment variable
+        // Supports multiple endpoints separated by comma: "api.anthropic.com,127.0.0.1:8765,http://localhost:8080"
+        // If not set, defaults to api.anthropic.com
+        const customEndpoint = process.env.CLAUDE_TRACE_API_ENDPOINT;
+        const apiEndpoints = customEndpoint && customEndpoint.trim() !== ""
+            ? customEndpoint.split(",").map(e => {
+                const trimmed = e.trim();
+                // Strip protocol prefix if present for matching (http://, https://)
+                return trimmed.replace(/^https?:\/\//, "");
+            }).filter(e => e !== "")
+            : ["api.anthropic.com"];
         const messagesPath = process.env.CLAUDE_TRACE_MESSAGES_PATH || "/v1/messages";
+        // Strip protocol from URL for matching
+        const urlWithoutProtocol = urlString.replace(/^https?:\/\//, "");
+        // Check if URL matches any of the configured endpoints
+        const matchesEndpoint = apiEndpoints.some(endpoint => urlWithoutProtocol.includes(endpoint));
         if (includeAllRequests) {
-            return urlString.includes(apiEndpoint); // 捕获所有自定义端点的API请求
+            return matchesEndpoint;
         }
-        return urlString.includes(apiEndpoint) && urlString.includes(messagesPath);
+        return matchesEndpoint && urlString.includes(messagesPath);
     }
     generateRequestId() {
         return `req_${Date.now()}_${Math.random().toString(36).substring(2, 11)}`;
@@ -355,6 +368,10 @@ class ClaudeTrafficLogger {
         }
     }
     cleanup() {
+        // Only log if we actually captured some traffic
+        if (this.pairs.length === 0 && this.pendingRequests.size === 0) {
+            return;
+        }
         console.log("Cleaning up orphaned requests...");
         for (const [, requestData] of this.pendingRequests.entries()) {
             const orphanedPair = {
