@@ -94,19 +94,121 @@ For more information, visit: https://github.com/mariozechner/claude-trace
 `);
 }
 
-function getClaudeAbsolutePath(): string {
+/** Check if a file path points to a JavaScript entry point */
+function isJsEntryPoint(filePath: string): boolean {
+	return /\.(js|mjs|cjs)$/i.test(filePath);
+}
+
+/** Check if the resolved claude path is a native binary (not a JS file) */
+function isNativeBinary(claudePath: string): boolean {
+	if (isJsEntryPoint(claudePath)) return false;
+	// On Unix, the file might be a JS script without extension (with shebang)
+	if (process.platform !== "win32") {
+		try {
+			const head = fs.readFileSync(claudePath, "utf-8").slice(0, 256);
+			if (head.startsWith("#!") && (head.includes("node") || head.includes("bun") || head.includes("tsx"))) {
+				return false; // It's a script with shebang
+			}
+		} catch (e) {
+			// Binary file - readFileSync with utf-8 may still work but content will be garbled
+		}
+	}
+	return true;
+}
+
+/** Try to find a JS entry point for Claude Code in the npm global directory */
+function resolveClaudeJsEntry(npmBinDir: string): string | null {
+	const packageDir = path.join(npmBinDir, "node_modules", "@anthropic-ai", "claude-code");
+
+	if (!fs.existsSync(packageDir)) return null;
+
+	// Check package.json for main/bin JS entries
 	try {
-		return require("child_process")
-			.execSync("which claude", {
+		const pkgJson = JSON.parse(fs.readFileSync(path.join(packageDir, "package.json"), "utf-8"));
+
+		if (pkgJson.main && isJsEntryPoint(pkgJson.main)) {
+			const mainPath = path.join(packageDir, pkgJson.main);
+			if (fs.existsSync(mainPath)) return mainPath;
+		}
+
+		if (pkgJson.bin) {
+			const binEntries = typeof pkgJson.bin === "string" ? [pkgJson.bin] : Object.values(pkgJson.bin) as string[];
+			for (const entry of binEntries) {
+				if (isJsEntryPoint(entry)) {
+					const binPath = path.join(packageDir, entry);
+					if (fs.existsSync(binPath)) return binPath;
+				}
+			}
+		}
+	} catch (e) {}
+
+	// Check common JS entry points
+	const candidates = ["cli.js", "index.js", "dist/cli.js", "dist/index.js", "bin/claude.js", "src/cli.js"];
+	for (const candidate of candidates) {
+		const candidatePath = path.join(packageDir, candidate);
+		if (fs.existsSync(candidatePath)) return candidatePath;
+	}
+
+	return null;
+}
+
+function getClaudeAbsolutePath(): string {
+	const isWindows = process.platform === "win32";
+
+	try {
+		const cmd = isWindows ? "where claude" : "which claude";
+		const lines = require("child_process")
+			.execSync(cmd, {
 				encoding: "utf-8",
+				stdio: ["pipe", "pipe", "pipe"],
 			})
-			.trim();
+			.trim()
+			.split(/\r?\n/)
+			.map((l: string) => l.trim())
+			.filter((l: string) => l.length > 0);
+
+		if (isWindows) {
+			// On Windows, 'where' may return multiple results (e.g., .exe, .cmd, Unix wrapper).
+			// Priority: JS entry from npm package > .exe > .cmd > first result
+
+			// 1. Check if any result is directly a JS file
+			const jsPath = lines.find((p: string) => isJsEntryPoint(p));
+			if (jsPath) return jsPath;
+
+			// 2. Try to resolve JS entry from npm package via .cmd wrapper
+			const cmdPath = lines.find((p: string) => p.endsWith(".cmd"));
+			if (cmdPath) {
+				const npmDir = path.dirname(cmdPath);
+				const jsEntry = resolveClaudeJsEntry(npmDir);
+				if (jsEntry) return jsEntry;
+			}
+
+			// 3. Fallback to .exe (will use native binary spawning)
+			const exePath = lines.find((p: string) => p.endsWith(".exe"));
+			if (exePath) return exePath;
+
+			// 4. Last resort
+			return lines[0];
+		}
+
+		return lines[0];
 	} catch (error) {
 		const os = require("os");
 		const localClaudePath = path.join(os.homedir(), ".claude", "local", "node_modules", ".bin", "claude");
 
 		if (fs.existsSync(localClaudePath)) {
 			return localClaudePath;
+		}
+
+		// On Windows, also check common npm global paths
+		if (isWindows) {
+			const npmGlobalPaths = [
+				path.join(process.env.APPDATA || "", "npm", "node_modules", "@anthropic-ai", "claude-code", "bin", "claude.exe"),
+				path.join(process.env.LOCALAPPDATA || "", "npm", "node_modules", "@anthropic-ai", "claude-code", "bin", "claude.exe"),
+			];
+			for (const p of npmGlobalPaths) {
+				if (fs.existsSync(p)) return p;
+			}
 		}
 
 		log(`❌ Claude CLI not found in PATH`, "red");
@@ -125,6 +227,50 @@ function getLoaderPath(): string {
 	}
 
 	return loaderPath;
+}
+
+/**
+ * Spawn Claude with interception.
+ * - For JS entry points: use `node --require interceptor claudePath`
+ * - For native binaries: spawn directly with NODE_OPTIONS for interception
+ */
+function spawnClaudeProcess(
+	claudePath: string,
+	loaderOrExtractorPath: string,
+	claudeArgs: string[],
+	extraEnv: Record<string, string>,
+): ChildProcess {
+	const native = isNativeBinary(claudePath);
+
+	if (native) {
+		log(`ℹ️  Native binary detected: ${path.basename(claudePath)}`, "yellow");
+
+		// For native binaries, spawn directly.
+		// Set NODE_OPTIONS to inject the interceptor (works for Node.js SEA binaries).
+		// For Bun-compiled binaries, NODE_OPTIONS is ignored but won't cause errors.
+		return spawn(claudePath, claudeArgs, {
+			env: {
+				...process.env,
+				...extraEnv,
+				NODE_OPTIONS: `--require "${loaderOrExtractorPath}" --no-deprecation`,
+			},
+			stdio: "inherit",
+			cwd: process.cwd(),
+			shell: process.platform === "win32",
+		});
+	} else {
+		// JS entry point - use node --require (original approach)
+		const spawnArgs = ["--require", loaderOrExtractorPath, claudePath, ...claudeArgs];
+		return spawn("node", spawnArgs, {
+			env: {
+				...process.env,
+				...extraEnv,
+				NODE_OPTIONS: "--no-deprecation",
+			},
+			stdio: "inherit",
+			cwd: process.cwd(),
+		});
+	}
 }
 
 // Scenario 1: No args -> launch node with interceptor and absolute path to claude
@@ -147,17 +293,9 @@ async function runClaudeWithInterception(
 	log("📁 Logs will be written to: .claude-trace/log-YYYY-MM-DD-HH-MM-SS.{jsonl,html}", "blue");
 	console.log("");
 
-	// Launch node with interceptor and absolute path to claude, plus any additional arguments
-	const spawnArgs = ["--require", loaderPath, claudePath, ...claudeArgs];
-	const child: ChildProcess = spawn("node", spawnArgs, {
-		env: {
-			...process.env,
-			NODE_OPTIONS: "--no-deprecation",
-			CLAUDE_TRACE_INCLUDE_ALL_REQUESTS: includeAllRequests ? "true" : "false",
-			CLAUDE_TRACE_OPEN_BROWSER: openInBrowser ? "true" : "false",
-		},
-		stdio: "inherit",
-		cwd: process.cwd(),
+	const child = spawnClaudeProcess(claudePath, loaderPath, claudeArgs, {
+		CLAUDE_TRACE_INCLUDE_ALL_REQUESTS: includeAllRequests ? "true" : "false",
+		CLAUDE_TRACE_OPEN_BROWSER: openInBrowser ? "true" : "false",
 	});
 
 	// Handle child process events
@@ -228,16 +366,11 @@ async function extractToken(): Promise<void> {
 		}
 	};
 
-	// Launch node with token interceptor and absolute path to claude
+	// Launch claude with token interceptor
 	const { ANTHROPIC_API_KEY, ...envWithoutApiKey } = process.env;
-	const child: ChildProcess = spawn("node", ["--require", tokenExtractorPath, claudePath, "-p", "hello"], {
-		env: {
-			...envWithoutApiKey,
-			NODE_TLS_REJECT_UNAUTHORIZED: "0",
-			CLAUDE_TRACE_TOKEN_FILE: tokenFile,
-		},
-		stdio: "inherit", // Suppress all output from Claude
-		cwd: process.cwd(),
+	const child = spawnClaudeProcess(claudePath, tokenExtractorPath, ["-p", "hello"], {
+		NODE_TLS_REJECT_UNAUTHORIZED: "0",
+		CLAUDE_TRACE_TOKEN_FILE: tokenFile,
 	});
 
 	// Set a timeout to avoid hanging
@@ -312,7 +445,8 @@ async function generateHTMLFromCLI(
 		const finalOutputFile = await htmlGenerator.generateHTMLFromJSONL(inputFile, outputFile, includeAllRequests);
 
 		if (openInBrowser) {
-			spawn("open", [finalOutputFile], { detached: true, stdio: "ignore" }).unref();
+			const openCmd = process.platform === "win32" ? "start" : process.platform === "darwin" ? "open" : "xdg-open";
+			spawn(openCmd, [finalOutputFile], { detached: true, stdio: "ignore", shell: process.platform === "win32" }).unref();
 			log(`🌐 Opening ${finalOutputFile} in browser`, "green");
 		}
 
