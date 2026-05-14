@@ -1,13 +1,15 @@
 {
   "name": "@loki-zhou/claude-trace",
-  "version": "1.0.4",
+  "version": "1.0.5",
   "description": "Record all your interactions with Claude Code as you develop your projects, with additional features",
   "main": "dist/index.js",
   "bin": {
     "claude-trace": "dist/cli.js"
   },
   "scripts": {
-    "build": "tsc && cp src/interceptor-loader.js src/token-extractor.js dist/ && npm run build:frontend",
+    "prepare": "node -e \"const fs=require('fs');if(!fs.existsSync('dist/cli.js')){process.exit(1)}\" || npm run build:core",
+    "build:core": "npx tsc && node -e \"const fs=require('fs');fs.copyFileSync('src/interceptor-loader.js','dist/interceptor-loader.js');fs.copyFileSync('src/token-extractor.js','dist/token-extractor.js')\"",
+    "build": "npm run build:core && npm run build:frontend",
     "build:frontend": "cd frontend && npm run build",
     "dev": "concurrently \"npm run dev:core\" \"npm run dev:copy\" \"npm run dev:frontend\"",
     "dev:core": "tsc --watch --preserveWatchOutput",
@@ -36,20 +38,20 @@
   ],
   "author": "Your Name <your@email.com>",
   "license": "MIT",
-  "homepage": "https://github.com/loki-zhou/claude-trace#readme",
+  "homepage": "https://github.com/hj01857655/claude-trace#readme",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/loki-zhou/claude-trace.git"
+    "url": "git+https://github.com/hj01857655/claude-trace.git"
   },
-	"engines": {
-		"node": ">=16.0.0"
+  "engines": {
+    "node": ">=16.0.0"
   },
   "devDependencies": {
-		"@types/node": "^20.19.4",
-		"concurrently": "^9.1.2",
-		"typescript": "^5.0.0"
+    "@types/node": "^20.19.4",
+    "concurrently": "^9.1.2",
+    "typescript": "^5.0.0"
   },
   "dependencies": {
-		"@anthropic-ai/sdk": "^0.52.0"
+    "@anthropic-ai/sdk": "^0.52.0"
   }
 }
