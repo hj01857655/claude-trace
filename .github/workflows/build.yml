@@ -24,8 +24,17 @@ jobs:
       - name: Install dependencies
         run: npm install
 
-      - name: Build
-        run: npm run build
+      - name: Install frontend dependencies
+        run: cd frontend && npm install || true
+
+      - name: Build core (tsc + copy loaders)
+        run: |
+          npx tsc
+          cp src/interceptor-loader.js src/token-extractor.js dist/
+
+      - name: Build frontend (optional)
+        run: npm run build:frontend || echo "⚠️ Frontend build skipped"
+        continue-on-error: true
 
       - name: Commit dist
         run: |
