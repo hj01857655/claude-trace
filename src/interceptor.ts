@@ -1,5 +1,6 @@
 import fs from "fs";
 import path from "path";
+import os from "os";
 import { spawn } from "child_process";
 import { RawPair } from "./types";
 import { HTMLGenerator } from "./html-generator";
@@ -18,10 +19,14 @@ export class ClaudeTrafficLogger {
 	private pairs: RawPair[] = [];
 	private config: InterceptorConfig;
 	private htmlGenerator: HTMLGenerator;
+	private logFileInitialized: boolean = false;
 
 	constructor(config: InterceptorConfig = {}) {
+		// Default to user's home directory .claude-trace folder
+		const defaultLogDir = path.join(os.homedir(), ".claude-trace");
+
 		this.config = {
-			logDirectory: ".claude-trace",
+			logDirectory: defaultLogDir,
 			enableRealTimeHTML: true,
 			logLevel: "info",
 			...config,
@@ -42,8 +47,7 @@ export class ClaudeTrafficLogger {
 		// Initialize HTML generator
 		this.htmlGenerator = new HTMLGenerator();
 
-		// Clear log file
-		fs.writeFileSync(this.logFile, "");
+		// Don't create log file yet - wait until we have data to write
 	}
 
 	private isAnthropicAPI(url: string | URL): boolean {
@@ -408,6 +412,11 @@ export class ClaudeTrafficLogger {
 
 	private async writePairToLog(pair: RawPair): Promise<void> {
 		try {
+			// Initialize log file on first write
+			if (!this.logFileInitialized) {
+				fs.writeFileSync(this.logFile, "");
+				this.logFileInitialized = true;
+			}
 			const jsonLine = JSON.stringify(pair) + "\n";
 			fs.appendFileSync(this.logFile, jsonLine);
 		} catch (error) {
@@ -446,6 +455,11 @@ export class ClaudeTrafficLogger {
 			};
 
 			try {
+				// Initialize log file if needed before writing orphaned requests
+				if (!this.logFileInitialized) {
+					fs.writeFileSync(this.logFile, "");
+					this.logFileInitialized = true;
+				}
 				const jsonLine = JSON.stringify(orphanedPair) + "\n";
 				fs.appendFileSync(this.logFile, jsonLine);
 			} catch (error) {

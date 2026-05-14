@@ -8,14 +8,18 @@ exports.initializeInterceptor = initializeInterceptor;
 exports.getLogger = getLogger;
 const fs_1 = __importDefault(require("fs"));
 const path_1 = __importDefault(require("path"));
+const os_1 = __importDefault(require("os"));
 const child_process_1 = require("child_process");
 const html_generator_1 = require("./html-generator");
 class ClaudeTrafficLogger {
     constructor(config = {}) {
         this.pendingRequests = new Map();
         this.pairs = [];
+        this.logFileInitialized = false;
+        // Default to user's home directory .claude-trace folder
+        const defaultLogDir = path_1.default.join(os_1.default.homedir(), ".claude-trace");
         this.config = {
-            logDirectory: ".claude-trace",
+            logDirectory: defaultLogDir,
             enableRealTimeHTML: true,
             logLevel: "info",
             ...config,
@@ -31,8 +35,7 @@ class ClaudeTrafficLogger {
         this.htmlFile = path_1.default.join(this.logDir, `log-${timestamp}.html`);
         // Initialize HTML generator
         this.htmlGenerator = new html_generator_1.HTMLGenerator();
-        // Clear log file
-        fs_1.default.writeFileSync(this.logFile, "");
+        // Don't create log file yet - wait until we have data to write
     }
     isAnthropicAPI(url) {
         const urlString = typeof url === "string" ? url : url.toString();
@@ -346,6 +349,11 @@ class ClaudeTrafficLogger {
     }
     async writePairToLog(pair) {
         try {
+            // Initialize log file on first write
+            if (!this.logFileInitialized) {
+                fs_1.default.writeFileSync(this.logFile, "");
+                this.logFileInitialized = true;
+            }
             const jsonLine = JSON.stringify(pair) + "\n";
             fs_1.default.appendFileSync(this.logFile, jsonLine);
         }
@@ -381,6 +389,11 @@ class ClaudeTrafficLogger {
                 logged_at: new Date().toISOString(),
             };
             try {
+                // Initialize log file if needed before writing orphaned requests
+                if (!this.logFileInitialized) {
+                    fs_1.default.writeFileSync(this.logFile, "");
+                    this.logFileInitialized = true;
+                }
                 const jsonLine = JSON.stringify(orphanedPair) + "\n";
                 fs_1.default.appendFileSync(this.logFile, jsonLine);
             }

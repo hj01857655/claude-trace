@@ -11,6 +11,7 @@ export declare class ClaudeTrafficLogger {
     private pairs;
     private config;
     private htmlGenerator;
+    private logFileInitialized;
     constructor(config?: InterceptorConfig);
     private isAnthropicAPI;
     private generateRequestId;
